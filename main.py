@@ -22,13 +22,71 @@ SESSIONS_FOLDER = "user_sessions"
 os.makedirs(SONGS_FOLDER, exist_ok=True)
 os.makedirs(SESSIONS_FOLDER, exist_ok=True)
 
-# Globālie mainīgie radio stāvokļa pārvaldībai
-radio_active = {}  # {group_id: bool} – vai radio ir aktīvs grupā
-radio_message = {}  # {group_id: message_id} – pēdējās dziesmas ziņojuma ID
+# Globālie mainīgie atskaņotāja stāvokļa pārvaldībai
+player_active = {}  # {group_id: bool} – vai atskaņotājs ir aktīvs grupā
+player_message = {}  # {group_id: message_id} – pēdējās dziesmas ziņojuma ID
 
-def get_keyboard(radio_mode=False):
+# Meme teksti par kriptopasauli un mūziku
+meme_texts = [
+    "HODL the beat, not just the coin! 🎧",
+    "This track pumps harder than a bull run! 📈",
+    "Crypto vibes only – no fiat tunes here! 💸",
+    "To the moon, and to the dance floor! 🌙",
+    "Play this while you stake your $SQUONK! 🤑",
+    "When the beat drops, so does the market! 📉",
+    "Squonking my way to financial freedom! 🚀",
+    "This song’s a better investment than my altcoins! 🎶",
+    "Turn up the volume, turn down the FUD! 🔊",
+    "Crypto whales love this beat – guaranteed! 🐳",
+    "Wen lambo? Wen this track ends! 🏎️",
+    "This tune’s got more energy than a gas fee! ⛽",
+    "Squonk hard, trade smart! 💡",
+    "When your portfolio dips, but the beat don’t! 📊",
+    "This track’s a 100x gem – don’t miss out! 💎",
+    "Rugpulls can’t stop this rhythm! 🕺",
+    "Play this while you DCA your $SQUONK! 📅",
+    "Mooning to this beat – who needs charts? 🌕",
+    "When the market crashes, but the music slaps! 💥",
+    "This song’s my new wallet seed phrase! 🔑",
+    "Squonking through the bear market like… 🐻",
+    "Crypto bros and sick beats – name a better duo! 👊",
+    "This track’s hotter than a Solana transaction! ⚡",
+    "When your $SQUONK bags are heavy, but the beat is light! 🎒",
+    "Don’t FOMO on this song – it’s a banger! 🚨",
+    "This tune’s got more pumps than a shitcoin! 📈",
+    "Squonk now, panic sell later! 😅",
+    "When the beat hits harder than a market dip! 📉",
+    "This track’s my exit liquidity – I’m out! 🏃",
+    "Play this while you shill $SQUONK to your friends! 🗣️",
+    "Crypto gains and music pains – let’s roll! 🎸",
+    "When the market’s red, but the vibes are green! 🟢",
+    "This song’s a better store of value than BTC! 🪙",
+    "Squonking my way to the next ATH! 📈",
+    "Who needs a whitepaper when you’ve got this beat? 📜",
+    "This track’s my new crypto strategy – vibe only! 🧠",
+    "When the beat’s so good, you forget about your losses! 🥳",
+    "Squonk hard or go home – no paper hands here! ✋",
+    "This song’s my new staking reward! 🎁",
+    "When the market’s down, but the music’s up! 🔊",
+    "This track’s more decentralized than DeFi! 🌐",
+    "Squonking through the dip – nothing can stop me! 💪",
+    "Play this while you wait for the next pump! ⏳",
+    "This beat’s got more utility than my altcoins! 🔧",
+    "When your $SQUONK bags moon, but the beat moons harder! 🌑",
+    "Crypto life, music vibes – the perfect combo! 🎤",
+    "This track’s my new crypto advisor – trust me! 🤝",
+    "Squonk now, DYOR later! 🕵️",
+    "When the beat’s so good, you forget about gas fees! ⛽",
+    "This song’s my new rugpull protection! 🛡️",
+    "Squonking all the way to the bank! 🏦",
+    "Play this while you dream of $SQUONK millions! 💭",
+    "This track’s the only thing I’m not selling! 🚫",
+    "When the market’s volatile, but the beat’s stable! ⚖️"
+]
+
+def get_keyboard(player_mode=False):
     kb = InlineKeyboardMarkup()
-    if radio_mode:
+    if player_mode:
         kb.add(
             InlineKeyboardButton("▶️ Play Next Automatically", callback_data="next_auto"),
             InlineKeyboardButton("📜 Playlist", callback_data="show_playlist")
@@ -86,7 +144,7 @@ async def generate_playlist(chat_id):
         kb.add(InlineKeyboardButton(f"▶️ {title}", callback_data=f"play:{f}"))
     return text, kb
 
-async def play_song(chat_id, song_file=None, radio_mode=False):
+async def play_song(chat_id, song_file=None, player_mode=False):
     group_id = str(chat_id)
     folder = os.path.join(SONGS_FOLDER, group_id)
     songs = [f for f in os.listdir(folder) if f.endswith(".mp3")]
@@ -99,12 +157,14 @@ async def play_song(chat_id, song_file=None, radio_mode=False):
     file_path = os.path.join(folder, chosen)
     title, artist = base, "$SQUONK"
     duration = int(MP3(file_path).info.length)
-    duration_str = f"{duration // 60}:{duration % 60:02d}"
     if os.path.exists(meta_path):
         with open(meta_path) as f:
             meta = json.load(f)
             title = meta.get("title", base)
             artist = meta.get("artist", "$SQUONK")
+
+    # Izvēlamies nejaušu meme tekstu
+    meme_text = random.choice(meme_texts)
 
     message = await bot.send_audio(
         chat_id,
@@ -113,22 +173,31 @@ async def play_song(chat_id, song_file=None, radio_mode=False):
         performer=artist,
         duration=duration,
         caption=(
-            f"🎶 Squonking time! 0:00 / {duration_str}\n"
             "Press the Play button above to listen! 🎵\n"
-            "Powered by $SQUONK – Learn more at [squonk.meme](https://squonk.meme)\n"
-            "💰 Check $SQUONK stats on [Dexscreener](https://dexscreener.com/solana/8MBLr5THhfHevaRNrpij47uvjtRVpw4NeviM6dkt2afy)"
+            f"\n"
+            f"{meme_text}\n"
+            "Powered by $SQUONK – Learn more at squonk.meme"
         ),
-        reply_markup=get_keyboard(radio_mode=radio_mode)
+        reply_markup=get_keyboard(player_mode=player_mode)
     )
     return message, duration
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     await message.reply(
-        "👋 Welcome to Squonk Radio V0.4.0!\n"
-        "Use /setup in private chat or /play in group.\n"
-        "Start the radio with /start_radio and stop with /stop_radio.\n"
-        "Note: Press the Play button on each track to listen! 🎵"
+        "🎵 **Get Ready to Squonk with $SQUONK Music Player V1!** 🎶\n"
+        "Hey there, Squonker! Welcome to the ultimate music experience for the $SQUONK community! 🚀\n\n"
+        "🔥 **What’s this all about?**\n"
+        "We’re here to bring you the squonkiest beats while celebrating the $SQUONK token. Play tracks, vibe with friends, and dive into the world of $SQUONK – all in one place!\n\n"
+        "🎸 **How to Squonk:**\n"
+        "- Use /play to spin a single track.\n"
+        "- Fire up /start_player for non-stop squonking (stop it with /stop_player).\n"
+        "- Check out all tracks with /playlist.\n"
+        "- Learn more about $SQUONK with /token.\n"
+        "💡 *Tip:* Press the Play button on each track to listen!\n\n"
+        "🌟 **Powered by $SQUONK**\n"
+        "This player is brought to you by the $SQUONK token – the heart of our ecosystem. Want to know more? Visit squonk.meme and join the squonking revolution!\n\n"
+        "Let’s make some noise together! 🎤 #SquonkMusic #SQUONK"
     )
 
 @dp.message_handler(commands=["setup"])
@@ -179,35 +248,35 @@ async def play(message: types.Message):
 
     message, duration = await play_song(message.chat.id)
     if message:
-        radio_message[group_id] = message.message_id
+        player_message[group_id] = message.message_id
 
-@dp.message_handler(commands=["start_radio"])
-async def start_radio(message: types.Message):
+@dp.message_handler(commands=["start_player"])
+async def start_player(message: types.Message):
     group_id = str(message.chat.id)
-    if radio_active.get(group_id, False):
-        return await message.reply("📻 Radio mode is already active! Use /stop_radio to stop.")
+    if player_active.get(group_id, False):
+        return await message.reply("🎵 Music player is already active! Use /stop_player to stop.")
     
-    radio_active[group_id] = True
+    player_active[group_id] = True
     await message.reply(
-        "📻 Starting Squonk Radio Mode! 🎵\n"
+        "🎵 Starting Squonk Music Player! 🎶\n"
         "Each track will load automatically. Press the Play button on each track to listen.\n"
-        "Use /stop_radio to stop the radio."
+        "Use /stop_player to stop the player."
     )
-    message, duration = await play_song(message.chat.id, radio_mode=True)
+    message, duration = await play_song(message.chat.id, player_mode=True)
     if message:
-        radio_message[group_id] = message.message_id
+        player_message[group_id] = message.message_id
 
-@dp.message_handler(commands=["stop_radio"])
-async def stop_radio(message: types.Message):
+@dp.message_handler(commands=["stop_player"])
+async def stop_player(message: types.Message):
     group_id = str(message.chat.id)
-    if not radio_active.get(group_id, False):
-        return await message.reply("📻 Radio mode is not active!")
+    if not player_active.get(group_id, False):
+        return await message.reply("🎵 Music player is not active!")
     
-    radio_active[group_id] = False
-    if group_id in radio_message:
-        await bot.delete_message(chat_id=message.chat.id, message_id=radio_message[group_id])
-        del radio_message[group_id]
-    await message.reply("📻 Squonk Radio Mode stopped.")
+    player_active[group_id] = False
+    if group_id in player_message:
+        await bot.delete_message(chat_id=message.chat.id, message_id=player_message[group_id])
+        del player_message[group_id]
+    await message.reply("🎵 Squonk Music Player stopped.")
 
 @dp.message_handler(commands=["playlist"])
 async def playlist(message: types.Message):
@@ -218,9 +287,8 @@ async def playlist(message: types.Message):
 async def token_info(message: types.Message):
     await message.reply(
         "💰 **$SQUONK Token Info**\n"
-        "The heart of the Squonk ecosystem! $SQUONK powers our community and radio bot.\n"
-        "🌐 Learn more at [squonk.meme](https://squonk.meme)\n"
-        "📊 Check $SQUONK price and stats on [Dexscreener](https://dexscreener.com/solana/8MBLr5THhfHevaRNrpij47uvjtRVpw4NeviM6dkt2afy)\n"
+        "The heart of the Squonk ecosystem! $SQUONK powers our community and music player.\n"
+        "🌐 Learn more at squonk.meme\n"
         "Join the squonking revolution! 🚀"
     )
 
@@ -228,9 +296,9 @@ async def token_info(message: types.Message):
 async def callback_play_specific(call: types.CallbackQuery):
     group_id = str(call.message.chat.id)
     song_file = call.data.split(":", 1)[1]
-    message, duration = await play_song(call.message.chat.id, song_file, radio_mode=radio_active.get(group_id, False))
+    message, duration = await play_song(call.message.chat.id, song_file, player_mode=player_active.get(group_id, False))
     if message:
-        radio_message[group_id] = message.message_id
+        player_message[group_id] = message.message_id
     await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data in ["next", "next_auto", "show_playlist"])
@@ -242,9 +310,9 @@ async def callback_buttons(call: types.CallbackQuery):
         return await call.answer("❌ No songs available.", show_alert=True)
 
     if call.data in ["next", "next_auto"]:
-        message, duration = await play_song(call.message.chat.id, radio_mode=radio_active.get(group_id, False))
+        message, duration = await play_song(call.message.chat.id, player_mode=player_active.get(group_id, False))
         if message:
-            radio_message[group_id] = message.message_id
+            player_message[group_id] = message.message_id
     elif call.data == "show_playlist":
         text, kb = await generate_playlist(call.message.chat.id)
         await call.message.reply(text, reply_markup=kb)
