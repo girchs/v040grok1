@@ -1,8 +1,8 @@
-
 import logging
 import os
 import random
 import json
+import asyncio
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
@@ -22,12 +22,22 @@ SESSIONS_FOLDER = "user_sessions"
 os.makedirs(SONGS_FOLDER, exist_ok=True)
 os.makedirs(SESSIONS_FOLDER, exist_ok=True)
 
-def get_keyboard():
+# Globālie mainīgie radio stāvokļa pārvaldībai
+radio_active = {}  # {group_id: bool} – vai radio ir aktīvs grupā
+radio_message = {}  # {group_id: message_id} – pēdējās dziesmas ziņojuma ID
+
+def get_keyboard(radio_mode=False):
     kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("▶️ Next", callback_data="next"),
-        InlineKeyboardButton("🔁 Replay", callback_data="replay")
-    )
+    if radio_mode:
+        kb.add(
+            InlineKeyboardButton("▶️ Play Next Automatically", callback_data="next_auto"),
+            InlineKeyboardButton("📜 Playlist", callback_data="show_playlist")
+        )
+    else:
+        kb.add(
+            InlineKeyboardButton("▶️ Next", callback_data="next"),
+            InlineKeyboardButton("📜 Playlist", callback_data="show_playlist")
+        )
     return kb
 
 def get_session_path(user_id):
@@ -53,11 +63,72 @@ def extract_metadata(file_path, fallback_title):
         title, artist = fallback_title, "$SQUONK"
     return title, artist
 
+async def generate_playlist(chat_id):
+    group_id = str(chat_id)
+    folder = os.path.join(SONGS_FOLDER, group_id)
+    if not os.path.exists(folder):
+        return "❌ No songs found.", None
+
+    songs = [f for f in os.listdir(folder) if f.endswith(".mp3")]
+    if not songs:
+        return "❌ Playlist is empty.", None
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    text = "🎵 Playlist:\n"
+    for f in songs:
+        meta_path = os.path.join(folder, f + ".json")
+        title = os.path.splitext(f)[0]
+        if os.path.exists(meta_path):
+            with open(meta_path) as meta:
+                m = json.load(meta)
+                title = m.get("title", title)
+        text += f"• {title}\n"
+        kb.add(InlineKeyboardButton(f"▶️ {title}", callback_data=f"play:{f}"))
+    return text, kb
+
+async def play_song(chat_id, song_file=None, radio_mode=False):
+    group_id = str(chat_id)
+    folder = os.path.join(SONGS_FOLDER, group_id)
+    songs = [f for f in os.listdir(folder) if f.endswith(".mp3")]
+    if not songs:
+        return None, None
+
+    chosen = song_file if song_file else random.choice(songs)
+    base = os.path.splitext(chosen)[0]
+    meta_path = os.path.join(folder, chosen + ".json")
+    file_path = os.path.join(folder, chosen)
+    title, artist = base, "$SQUONK"
+    duration = int(MP3(file_path).info.length)
+    duration_str = f"{duration // 60}:{duration % 60:02d}"
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+            title = meta.get("title", base)
+            artist = meta.get("artist", "$SQUONK")
+
+    message = await bot.send_audio(
+        chat_id,
+        open(file_path, "rb"),
+        title=title,
+        performer=artist,
+        duration=duration,
+        caption=(
+            f"🎶 Squonking time! 0:00 / {duration_str}\n"
+            "Press the Play button above to listen! 🎵\n"
+            "Powered by $SQUONK – Learn more at [squonk.meme](https://squonk.meme)\n"
+            "💰 Check $SQUONK stats on [Dexscreener](https://dexscreener.com/solana/8MBLr5THhfHevaRNrpij47uvjtRVpw4NeviM6dkt2afy)"
+        ),
+        reply_markup=get_keyboard(radio_mode=radio_mode)
+    )
+    return message, duration
+
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     await message.reply(
         "👋 Welcome to Squonk Radio V0.4.0!\n"
-        "Use /setup in private chat or /play in group."
+        "Use /setup in private chat or /play in group.\n"
+        "Start the radio with /start_radio and stop with /stop_radio.\n"
+        "Note: Press the Play button on each track to listen! 🎵"
     )
 
 @dp.message_handler(commands=["setup"])
@@ -106,72 +177,63 @@ async def play(message: types.Message):
     if not songs:
         return await message.reply("❌ No audio files found.")
 
-    chosen = random.choice(songs)
-    base = os.path.splitext(chosen)[0]
-    meta_path = os.path.join(folder, chosen + ".json")
-    title, artist = base, "$SQUONK"
-    if os.path.exists(meta_path):
-        with open(meta_path) as f:
-            meta = json.load(f)
-            title = meta.get("title", base)
-            artist = meta.get("artist", "$SQUONK")
+    message, duration = await play_song(message.chat.id)
+    if message:
+        radio_message[group_id] = message.message_id
 
-    await message.reply_audio(
-        open(os.path.join(folder, chosen), "rb"),
-        title=title,
-        performer=artist,
-        caption="🎶 Squonking time!",
-        reply_markup=get_keyboard()
+@dp.message_handler(commands=["start_radio"])
+async def start_radio(message: types.Message):
+    group_id = str(message.chat.id)
+    if radio_active.get(group_id, False):
+        return await message.reply("📻 Radio mode is already active! Use /stop_radio to stop.")
+    
+    radio_active[group_id] = True
+    await message.reply(
+        "📻 Starting Squonk Radio Mode! 🎵\n"
+        "Each track will load automatically. Press the Play button on each track to listen.\n"
+        "Use /stop_radio to stop the radio."
     )
+    message, duration = await play_song(message.chat.id, radio_mode=True)
+    if message:
+        radio_message[group_id] = message.message_id
+
+@dp.message_handler(commands=["stop_radio"])
+async def stop_radio(message: types.Message):
+    group_id = str(message.chat.id)
+    if not radio_active.get(group_id, False):
+        return await message.reply("📻 Radio mode is not active!")
+    
+    radio_active[group_id] = False
+    if group_id in radio_message:
+        await bot.delete_message(chat_id=message.chat.id, message_id=radio_message[group_id])
+        del radio_message[group_id]
+    await message.reply("📻 Squonk Radio Mode stopped.")
 
 @dp.message_handler(commands=["playlist"])
 async def playlist(message: types.Message):
-    group_id = str(message.chat.id)
-    folder = os.path.join(SONGS_FOLDER, group_id)
-    if not os.path.exists(folder):
-        return await message.reply("❌ No songs found.")
-    songs = [f for f in os.listdir(folder) if f.endswith(".mp3")]
-    if not songs:
-        return await message.reply("❌ Playlist is empty.")
-
-    kb = InlineKeyboardMarkup(row_width=1)
-    text = "🎵 Playlist:\n"
-    for f in songs:
-        meta_path = os.path.join(folder, f + ".json")
-        title = os.path.splitext(f)[0]
-        if os.path.exists(meta_path):
-            with open(meta_path) as meta:
-                m = json.load(meta)
-                title = m.get("title", title)
-        text += f"• {title}\n"
-        kb.add(InlineKeyboardButton(f"▶️ {title}", callback_data=f"play:{f}"))
+    text, kb = await generate_playlist(message.chat.id)
     await message.reply(text, reply_markup=kb)
+
+@dp.message_handler(commands=["token"])
+async def token_info(message: types.Message):
+    await message.reply(
+        "💰 **$SQUONK Token Info**\n"
+        "The heart of the Squonk ecosystem! $SQUONK powers our community and radio bot.\n"
+        "🌐 Learn more at [squonk.meme](https://squonk.meme)\n"
+        "📊 Check $SQUONK price and stats on [Dexscreener](https://dexscreener.com/solana/8MBLr5THhfHevaRNrpij47uvjtRVpw4NeviM6dkt2afy)\n"
+        "Join the squonking revolution! 🚀"
+    )
 
 @dp.callback_query_handler(lambda c: c.data.startswith("play:"))
 async def callback_play_specific(call: types.CallbackQuery):
     group_id = str(call.message.chat.id)
     song_file = call.data.split(":", 1)[1]
-    folder = os.path.join(SONGS_FOLDER, group_id)
-    path = os.path.join(folder, song_file)
-    meta_path = path + ".json"
-    title, artist = os.path.splitext(song_file)[0], "$SQUONK"
-    if os.path.exists(meta_path):
-        with open(meta_path) as f:
-            meta = json.load(f)
-            title = meta.get("title", title)
-            artist = meta.get("artist", "$SQUONK")
-
-    await bot.send_audio(
-        call.message.chat.id,
-        open(path, "rb"),
-        title=title,
-        performer=artist,
-        caption="🎧 Playing selected track!",
-        reply_markup=get_keyboard()
-    )
+    message, duration = await play_song(call.message.chat.id, song_file, radio_mode=radio_active.get(group_id, False))
+    if message:
+        radio_message[group_id] = message.message_id
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data in ["next", "replay"])
+@dp.callback_query_handler(lambda c: c.data in ["next", "next_auto", "show_playlist"])
 async def callback_buttons(call: types.CallbackQuery):
     group_id = str(call.message.chat.id)
     folder = os.path.join(SONGS_FOLDER, group_id)
@@ -179,24 +241,14 @@ async def callback_buttons(call: types.CallbackQuery):
     if not songs:
         return await call.answer("❌ No songs available.", show_alert=True)
 
-    chosen = random.choice(songs) if call.data == "next" else songs[0]
-    base = os.path.splitext(chosen)[0]
-    meta_path = os.path.join(folder, chosen + ".json")
-    title, artist = base, "$SQUONK"
-    if os.path.exists(meta_path):
-        with open(meta_path) as f:
-            meta = json.load(f)
-            title = meta.get("title", base)
-            artist = meta.get("artist", "$SQUONK")
+    if call.data in ["next", "next_auto"]:
+        message, duration = await play_song(call.message.chat.id, radio_mode=radio_active.get(group_id, False))
+        if message:
+            radio_message[group_id] = message.message_id
+    elif call.data == "show_playlist":
+        text, kb = await generate_playlist(call.message.chat.id)
+        await call.message.reply(text, reply_markup=kb)
 
-    await bot.send_audio(
-        call.message.chat.id,
-        open(os.path.join(folder, chosen), "rb"),
-        title=title,
-        performer=artist,
-        caption="▶️ Next beat!" if call.data == "next" else "🔁 Replay mode!",
-        reply_markup=get_keyboard()
-    )
     await call.answer()
 
 if __name__ == "__main__":
